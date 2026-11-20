@@ -523,6 +523,40 @@
       box-shadow: 0 0 0 3px rgba(66, 104, 239, .16);
     }
 
+    .scene-rotation-handle {
+      position: absolute;
+      z-index: 4;
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      padding: 0;
+      border: 1px solid #c9d4eb;
+      border-radius: 50%;
+      color: #3557ce;
+      background: #fff;
+      box-shadow: 0 2px 8px rgba(35, 54, 91, .2);
+      cursor: grab;
+      font-size: 19px;
+      line-height: 1;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .scene-rotation-handle[hidden] {
+      display: none;
+    }
+
+    .scene-rotation-handle:focus-visible {
+      outline: 3px solid rgba(66, 104, 239, .35);
+      outline-offset: 2px;
+    }
+
+    .scene-rotation-handle:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+    }
+
     .scene-object.is-impact::after {
       position: absolute;
       inset: -5px;
@@ -2383,8 +2417,8 @@
               <button class="secondary-button" id="clear-scene" type="button">Очистить сцену</button>
             </div>
             <p class="scene-metrics" id="scene-metrics">Параметры падения появятся при запуске симуляции.</p>
-            <p class="physics-hint">Упрощённая модель: свободное падение и отскок от пола; столкновения между объектами
-              не рассчитываются.</p>
+            <p class="physics-hint">Объекты взаимодействуют с полом, стенами, друг с другом и с наклонной плоскостью.
+              Поставь шар на плоскость и запусти симуляцию, чтобы увидеть его движение вниз по склону.</p>
           </section>
         </div>
       </section>
@@ -3758,6 +3792,23 @@
     let sceneRunning = false;
     let sceneLastFrame = 0;
     let sceneLastReadout = 0;
+    let sceneRotate = null;
+    const sceneRotationHandle = document.createElement("button");
+    sceneRotationHandle.type = "button";
+    sceneRotationHandle.className = "scene-rotation-handle";
+    sceneRotationHandle.textContent = "↻";
+    sceneRotationHandle.title = "Перетащи, чтобы повернуть объект";
+    sceneRotationHandle.setAttribute("aria-label", "Повернуть выбранный объект");
+    sceneRotationHandle.hidden = true;
+    sceneObjectLayer.appendChild(sceneRotationHandle);
+
+    function sceneSelectionDescription(object) {
+      const definition = sceneDefinitions[object.type];
+      const rotationHint = definition.rotatable
+        ? "поверни круглый маркер рядом с ним"
+        : "шар не поворачивается";
+      return `${definition.label} · ${formatPhysicsNumber(object.mass)} кг. Перетащи объект, ${rotationHint} или измени свойства.`;
+    }
 
     function updateSceneSelection() {
       sceneObjects.forEach(object => {
@@ -3765,7 +3816,7 @@
       });
       document.getElementById("remove-scene-object").disabled = !selectedSceneObject;
       document.getElementById("scene-selection-hint").textContent = selectedSceneObject
-        ? `${sceneDefinitions[selectedSceneObject.type].label} · ${formatPhysicsNumber(selectedSceneObject.mass)} кг. Перетащи объект или измени его свойства.`
+        ? sceneSelectionDescription(selectedSceneObject)
         : "Выбери объект на поле, чтобы переместить или удалить его.";
       document.getElementById("scene-object-count").textContent = String(sceneObjects.length);
       const properties = document.getElementById("scene-object-properties");
@@ -3781,6 +3832,7 @@
         document.getElementById("scene-object-height-field").hidden = !definition.dynamic;
         if (definition.dynamic) updateSceneHeightField(selectedSceneObject);
       }
+      updateSceneRotationHandle(selectedSceneObject);
     }
 
     function sceneObjectVisualOffsets(object) {
@@ -3792,6 +3844,41 @@
         top: objectBounds.top - layerBounds.top - object.y,
         bottom: objectBounds.bottom - layerBounds.top - object.y
       };
+    }
+
+    function sceneObjectBounds(object) {
+      const offsets = sceneObjectVisualOffsets(object);
+      return {
+        left: object.x + offsets.left,
+        right: object.x + offsets.right,
+        top: object.y + offsets.top,
+        bottom: object.y + offsets.bottom
+      };
+    }
+
+    function updateSceneRotationHandle(object) {
+      if (!object || !sceneDefinitions[object.type].rotatable) {
+        sceneRotationHandle.hidden = true;
+        return;
+      }
+      sceneRotationHandle.disabled = sceneRunning;
+      const offsets = sceneObjectVisualOffsets(object);
+      const handleSize = 30;
+      const left = Math.min(
+        sceneObjectLayer.clientWidth - handleSize,
+        Math.max(0, object.x + offsets.right + 4)
+      );
+      const top = Math.min(
+        sceneObjectLayer.clientHeight - handleSize,
+        Math.max(0, object.y + offsets.top - 8)
+      );
+      sceneRotationHandle.style.left = `${left}px`;
+      sceneRotationHandle.style.top = `${top}px`;
+      sceneRotationHandle.setAttribute(
+        "aria-label",
+        `Повернуть ${sceneDefinitions[object.type].label.toLowerCase()}, сейчас ${Math.round(object.rotation)} градусов`
+      );
+      sceneRotationHandle.hidden = false;
     }
 
     function clampSceneObjectPosition(object, offsets = sceneObjectVisualOffsets(object)) {
@@ -3834,6 +3921,7 @@
       object.element.style.left = `${object.x}px`;
       object.element.style.top = `${object.y}px`;
       clampSceneObjectPosition(object);
+      if (object === selectedSceneObject) updateSceneRotationHandle(object);
     }
 
     function addSceneObject(type) {
@@ -3861,6 +3949,7 @@
         element,
         x: 20 + ((sceneObjects.length % 4) * 78),
         y: 18 + (Math.floor(sceneObjects.length / 4) * 58),
+        velocityX: 0,
         velocityY: 0,
         dynamic: definition.dynamic,
         rotation: definition.rotation,
@@ -3869,6 +3958,7 @@
         maxFallSpeed: 0,
         impactKineticEnergy: 0,
         startPotentialEnergy: 0,
+        onRamp: false,
         hasImpacted: false
       };
       updateSceneObjectAppearance(object);
@@ -3897,7 +3987,7 @@
       updateSceneObjectAppearance(selectedSceneObject);
       if (selectedSceneObject.dynamic) updateSceneHeightField(selectedSceneObject);
       document.getElementById("scene-selection-hint").textContent =
-        `${sceneDefinitions[selectedSceneObject.type].label} · ${formatPhysicsNumber(mass)} кг. Перетащи объект или измени его свойства.`;
+        sceneSelectionDescription(selectedSceneObject);
       document.getElementById("scene-status").textContent = "Свойства объекта обновлены.";
     }
 
@@ -3919,6 +4009,7 @@
       const targetBottom = sceneObjectLayer.clientHeight - height * 80;
       selectedSceneObject.y = targetBottom - offsets.bottom;
       clampSceneObjectPosition(selectedSceneObject, offsets);
+      updateSceneRotationHandle(selectedSceneObject);
       document.getElementById("scene-status").textContent = "Высота сброса обновлена.";
     });
 
@@ -3927,6 +4018,24 @@
     });
 
     sceneStage.addEventListener("pointerdown", event => {
+      if (event.target.closest(".scene-rotation-handle")) {
+        if (sceneRunning || !selectedSceneObject || !sceneDefinitions[selectedSceneObject.type].rotatable) return;
+        event.preventDefault();
+        const layerBounds = sceneObjectLayer.getBoundingClientRect();
+        const bounds = sceneObjectBounds(selectedSceneObject);
+        const centerX = layerBounds.left + (bounds.left + bounds.right) / 2;
+        const centerY = layerBounds.top + (bounds.top + bounds.bottom) / 2;
+        sceneRotate = {
+          object: selectedSceneObject,
+          pointerId: event.pointerId,
+          centerX,
+          centerY,
+          startAngle: Math.atan2(event.clientY - centerY, event.clientX - centerX) * 180 / Math.PI,
+          startRotation: selectedSceneObject.rotation
+        };
+        sceneRotationHandle.setPointerCapture(event.pointerId);
+        return;
+      }
       const element = event.target.closest("[data-scene-id]");
       if (!element || sceneRunning) return;
       const object = sceneObjects.find(item => item.element === element);
@@ -3945,6 +4054,15 @@
     });
 
     sceneStage.addEventListener("pointermove", event => {
+      if (sceneRotate && sceneRotate.pointerId === event.pointerId) {
+        const angle = Math.atan2(event.clientY - sceneRotate.centerY, event.clientX - sceneRotate.centerX) * 180 / Math.PI;
+        const delta = ((angle - sceneRotate.startAngle + 540) % 360) - 180;
+        const rotation = ((sceneRotate.startRotation + delta + 540) % 360) - 180;
+        sceneRotate.object.rotation = rotation;
+        document.getElementById("scene-object-rotation").value = String(Math.round(rotation));
+        updateSceneObjectAppearance(sceneRotate.object);
+        return;
+      }
       if (!sceneDrag || sceneDrag.pointerId !== event.pointerId) return;
       const layerBounds = sceneObjectLayer.getBoundingClientRect();
       const object = sceneDrag.object;
@@ -3952,15 +4070,33 @@
       object.x = event.clientX - layerBounds.left - sceneDrag.offsetX - offsets.left;
       object.y = event.clientY - layerBounds.top - sceneDrag.offsetY - offsets.top;
       clampSceneObjectPosition(object, offsets);
+      updateSceneRotationHandle(object);
       if (object === selectedSceneObject && object.dynamic) updateSceneHeightField(object);
     });
 
     function finishSceneDrag(event) {
       if (sceneDrag && sceneDrag.pointerId === event.pointerId) sceneDrag = null;
     }
+    function finishSceneRotation(event) {
+      if (sceneRotate && sceneRotate.pointerId === event.pointerId) sceneRotate = null;
+    }
     sceneStage.addEventListener("pointerup", finishSceneDrag);
     sceneStage.addEventListener("pointercancel", finishSceneDrag);
+    sceneStage.addEventListener("pointerup", finishSceneRotation);
+    sceneStage.addEventListener("pointercancel", finishSceneRotation);
     sceneStage.addEventListener("keydown", event => {
+      if (event.target.closest(".scene-rotation-handle") &&
+        ["ArrowLeft", "ArrowRight"].includes(event.key) && selectedSceneObject &&
+        sceneDefinitions[selectedSceneObject.type].rotatable) {
+        event.preventDefault();
+        const step = event.shiftKey ? 15 : 5;
+        selectedSceneObject.rotation += event.key === "ArrowRight" ? step : -step;
+        if (selectedSceneObject.rotation > 180) selectedSceneObject.rotation -= 360;
+        if (selectedSceneObject.rotation < -180) selectedSceneObject.rotation += 360;
+        document.getElementById("scene-object-rotation").value = String(selectedSceneObject.rotation);
+        updateSceneObjectAppearance(selectedSceneObject);
+        return;
+      }
       const element = event.target.closest("[data-scene-id]");
       if (!element || !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
       const object = sceneObjects.find(item => item.element === element);
@@ -3980,64 +4116,287 @@
       if (sceneAnimationFrame) cancelAnimationFrame(sceneAnimationFrame);
       sceneAnimationFrame = 0;
       sceneRunning = false;
-      sceneObjects.filter(object => object.dynamic).forEach(object => { object.velocityY = 0; });
+      if (selectedSceneObject) updateSceneRotationHandle(selectedSceneObject);
+      sceneObjects.filter(object => object.dynamic).forEach(object => {
+        object.velocityX = 0;
+        object.velocityY = 0;
+      });
       const button = document.getElementById("run-scene");
       if (button) button.textContent = "Запустить симуляцию";
       const status = document.getElementById("scene-status");
       if (status && message) status.textContent = message;
       const metrics = document.getElementById("scene-metrics");
-      if (metrics && message === "Падение завершено.") {
+      if (metrics && message === "Симуляция завершена.") {
         const results = sceneObjects.filter(object => object.dynamic).map(object =>
           `${sceneDefinitions[object.type].label}: макс. скорость ${formatPhysicsNumber(object.maxFallSpeed)} м/с; ` +
-          `кинетическая энергия при ударе ${formatPhysicsNumber(object.impactKineticEnergy)} Дж; ` +
+          `кинетическая энергия при первом контакте ${formatPhysicsNumber(object.impactKineticEnergy)} Дж; ` +
           `потенциальная энергия mgh ${formatPhysicsNumber(object.startPotentialEnergy)} Дж`
         );
-        metrics.textContent = `Итоги падения:\n${results.join("\n")}`;
+        metrics.textContent = `Итоги симуляции:\n${results.join("\n")}`;
       } else if (metrics && message) {
         metrics.textContent = message;
       }
     }
 
+    function sceneObjectSpeed(object) {
+      return Math.hypot(object.velocityX, object.velocityY) / 80;
+    }
+
+    function recordSceneImpact(object, normalSpeed) {
+      if (object.hasImpacted || normalSpeed < 20) return;
+      object.hasImpacted = true;
+      const speed = sceneObjectSpeed(object);
+      object.impactKineticEnergy = .5 * object.mass * speed * speed;
+      object.element.classList.remove("is-impact");
+      void object.element.offsetWidth;
+      object.element.classList.add("is-impact");
+      window.setTimeout(() => object.element.classList.remove("is-impact"), 350);
+    }
+
+    function setSceneObjectPosition(object) {
+      object.element.style.left = `${object.x}px`;
+      object.element.style.top = `${object.y}px`;
+    }
+
+    function applySceneFriction(object, tangentX, tangentY, maxSpeedChange) {
+      const speedAlongSurface = object.velocityX * tangentX + object.velocityY * tangentY;
+      const reducedSpeed = Math.sign(speedAlongSurface) *
+        Math.max(0, Math.abs(speedAlongSurface) - maxSpeedChange);
+      const change = reducedSpeed - speedAlongSurface;
+      object.velocityX += change * tangentX;
+      object.velocityY += change * tangentY;
+    }
+
+    function resolveSceneStaticContact(object, normalX, normalY, penetration, gravity, deltaTime, frictionCoefficient = .18) {
+      object.x += normalX * penetration;
+      object.y += normalY * penetration;
+      setSceneObjectPosition(object);
+      object.inContact = true;
+      const normalSpeed = object.velocityX * normalX + object.velocityY * normalY;
+      if (normalSpeed < 0) {
+        recordSceneImpact(object, -normalSpeed);
+        object.velocityX -= 1.12 * normalSpeed * normalX;
+        object.velocityY -= 1.12 * normalSpeed * normalY;
+      }
+      const tangentX = -normalY;
+      const tangentY = normalX;
+      applySceneFriction(object, tangentX, tangentY, frictionCoefficient * gravity * 80 * deltaTime);
+    }
+
+    function resolveSceneBoxContact(object, solid, gravity, deltaTime) {
+      const bodyBounds = sceneObjectBounds(object);
+      const solidBounds = sceneObjectBounds(solid);
+      const overlapX = Math.min(bodyBounds.right, solidBounds.right) - Math.max(bodyBounds.left, solidBounds.left);
+      const overlapY = Math.min(bodyBounds.bottom, solidBounds.bottom) - Math.max(bodyBounds.top, solidBounds.top);
+      if (overlapX <= 0 || overlapY <= 0) return false;
+      const bodyCenterX = (bodyBounds.left + bodyBounds.right) / 2;
+      const bodyCenterY = (bodyBounds.top + bodyBounds.bottom) / 2;
+      const solidCenterX = (solidBounds.left + solidBounds.right) / 2;
+      const solidCenterY = (solidBounds.top + solidBounds.bottom) / 2;
+      if (overlapX < overlapY) {
+        resolveSceneStaticContact(
+          object,
+          bodyCenterX < solidCenterX ? -1 : 1,
+          0,
+          overlapX,
+          gravity,
+          deltaTime
+        );
+      } else {
+        resolveSceneStaticContact(
+          object,
+          0,
+          bodyCenterY < solidCenterY ? -1 : 1,
+          overlapY,
+          gravity,
+          deltaTime
+        );
+      }
+      return true;
+    }
+
+    function resolveSceneBodyContact(first, second, gravity, deltaTime) {
+      const firstBounds = sceneObjectBounds(first);
+      const secondBounds = sceneObjectBounds(second);
+      const overlapX = Math.min(firstBounds.right, secondBounds.right) - Math.max(firstBounds.left, secondBounds.left);
+      const overlapY = Math.min(firstBounds.bottom, secondBounds.bottom) - Math.max(firstBounds.top, secondBounds.top);
+      if (overlapX <= 0 || overlapY <= 0) return false;
+      const firstCenterX = (firstBounds.left + firstBounds.right) / 2;
+      const firstCenterY = (firstBounds.top + firstBounds.bottom) / 2;
+      const secondCenterX = (secondBounds.left + secondBounds.right) / 2;
+      const secondCenterY = (secondBounds.top + secondBounds.bottom) / 2;
+      let normalX = 0;
+      let normalY = 0;
+      let penetration = overlapY;
+      if (overlapX < overlapY) {
+        normalX = firstCenterX < secondCenterX ? -1 : 1;
+        penetration = overlapX;
+      } else {
+        normalY = firstCenterY < secondCenterY ? -1 : 1;
+      }
+      const firstInverseMass = 1 / first.mass;
+      const secondInverseMass = 1 / second.mass;
+      const inverseMassSum = firstInverseMass + secondInverseMass;
+      const firstShare = firstInverseMass / inverseMassSum;
+      const secondShare = secondInverseMass / inverseMassSum;
+      first.x += normalX * penetration * firstShare;
+      first.y += normalY * penetration * firstShare;
+      second.x -= normalX * penetration * secondShare;
+      second.y -= normalY * penetration * secondShare;
+      setSceneObjectPosition(first);
+      setSceneObjectPosition(second);
+      first.inContact = true;
+      second.inContact = true;
+      const relativeNormalSpeed =
+        (first.velocityX - second.velocityX) * normalX +
+        (first.velocityY - second.velocityY) * normalY;
+      if (relativeNormalSpeed < 0) {
+        recordSceneImpact(first, -relativeNormalSpeed);
+        recordSceneImpact(second, -relativeNormalSpeed);
+        const impulse = -1.12 * relativeNormalSpeed / inverseMassSum;
+        first.velocityX += impulse * firstInverseMass * normalX;
+        first.velocityY += impulse * firstInverseMass * normalY;
+        second.velocityX -= impulse * secondInverseMass * normalX;
+        second.velocityY -= impulse * secondInverseMass * normalY;
+      }
+      applySceneFriction(first, -normalY, normalX, .04 * gravity * 80 * deltaTime);
+      applySceneFriction(second, -normalY, normalX, .04 * gravity * 80 * deltaTime);
+      return true;
+    }
+
+    function resolveSceneRampContact(object, ramp, gravity, deltaTime) {
+      const rampDefinition = sceneDefinitions[ramp.type];
+      const angle = ramp.rotation * Math.PI / 180;
+      const tangentX = Math.cos(angle);
+      const tangentY = Math.sin(angle);
+      const normalX = Math.sin(angle);
+      const normalY = -Math.cos(angle);
+      const rampBounds = sceneObjectBounds(ramp);
+      const bodyBounds = sceneObjectBounds(object);
+      const rampCenterX = (rampBounds.left + rampBounds.right) / 2;
+      const rampCenterY = (rampBounds.top + rampBounds.bottom) / 2;
+      const bodyCenterX = (bodyBounds.left + bodyBounds.right) / 2;
+      const bodyCenterY = (bodyBounds.top + bodyBounds.bottom) / 2;
+      const offsetX = bodyCenterX - rampCenterX;
+      const offsetY = bodyCenterY - rampCenterY;
+      const normalDistance = offsetX * normalX + offsetY * normalY;
+      const tangentDistance = offsetX * tangentX + offsetY * tangentY;
+      const halfWidth = (bodyBounds.right - bodyBounds.left) / 2;
+      const halfHeight = (bodyBounds.bottom - bodyBounds.top) / 2;
+      const normalSupport = Math.abs(normalX) * halfWidth + Math.abs(normalY) * halfHeight;
+      const tangentSupport = Math.abs(tangentX) * halfWidth + Math.abs(tangentY) * halfHeight;
+      const rampHalfLength = rampDefinition.width * ramp.sizeScale / 2;
+      const rampHalfThickness = rampDefinition.height * ramp.sizeScale / 2;
+      const maxDistance = normalSupport + rampHalfThickness;
+      if (Math.abs(tangentDistance) > rampHalfLength + tangentSupport ||
+        normalDistance >= maxDistance || normalDistance <= -maxDistance) return false;
+
+      object.onRamp = true;
+      resolveSceneStaticContact(object, normalX, normalY, maxDistance - normalDistance, gravity, deltaTime, 0);
+      const gravityAlongRamp = gravity * Math.abs(tangentY);
+      const availableFriction = .12 * gravity * Math.abs(normalY);
+      const tangentSpeed = object.velocityX * tangentX + object.velocityY * tangentY;
+      const friction = gravityAlongRamp <= availableFriction && Math.abs(tangentSpeed) < 30
+        ? Math.abs(tangentSpeed)
+        : availableFriction * deltaTime;
+      applySceneFriction(object, tangentX, tangentY, friction * 80);
+      return true;
+    }
+
+    function stepSceneSimulation(deltaTime, gravity, dynamicObjects) {
+      const pixelsPerMeter = 80;
+      const substeps = Math.max(1, Math.ceil(deltaTime / .008));
+      const stepTime = deltaTime / substeps;
+      for (let step = 0; step < substeps; step += 1) {
+        dynamicObjects.forEach(object => {
+          object.inContact = false;
+          object.onRamp = false;
+          object.velocityY += gravity * pixelsPerMeter * stepTime;
+          object.x += object.velocityX * stepTime;
+          object.y += object.velocityY * stepTime;
+          setSceneObjectPosition(object);
+          const speed = sceneObjectSpeed(object);
+          object.maxFallSpeed = Math.max(object.maxFallSpeed, speed);
+          if (!object.hasImpacted) object.impactKineticEnergy = .5 * object.mass * speed * speed;
+        });
+
+        dynamicObjects.forEach(object => {
+          let bounds = sceneObjectBounds(object);
+          if (bounds.left < 0) {
+            resolveSceneStaticContact(object, 1, 0, -bounds.left, gravity, stepTime);
+          }
+          bounds = sceneObjectBounds(object);
+          if (bounds.right > sceneObjectLayer.clientWidth) {
+            resolveSceneStaticContact(
+              object,
+              -1,
+              0,
+              bounds.right - sceneObjectLayer.clientWidth,
+              gravity,
+              stepTime
+            );
+          }
+          bounds = sceneObjectBounds(object);
+          if (bounds.bottom > sceneObjectLayer.clientHeight) {
+            resolveSceneStaticContact(
+              object,
+              0,
+              -1,
+              bounds.bottom - sceneObjectLayer.clientHeight,
+              gravity,
+              stepTime
+            );
+          }
+        });
+
+        const solidObjects = sceneObjects.filter(object => !object.dynamic);
+        dynamicObjects.forEach(object => {
+          solidObjects.forEach(solid => {
+            if (solid.type === "ramp") resolveSceneRampContact(object, solid, gravity, stepTime);
+            else resolveSceneBoxContact(object, solid, gravity, stepTime);
+          });
+        });
+
+        for (let firstIndex = 0; firstIndex < dynamicObjects.length; firstIndex += 1) {
+          for (let secondIndex = firstIndex + 1; secondIndex < dynamicObjects.length; secondIndex += 1) {
+            resolveSceneBodyContact(
+              dynamicObjects[firstIndex],
+              dynamicObjects[secondIndex],
+              gravity,
+              stepTime
+            );
+          }
+        }
+
+        dynamicObjects.forEach(object => {
+          const speed = sceneObjectSpeed(object);
+          object.maxFallSpeed = Math.max(object.maxFallSpeed, speed);
+          if (!object.hasImpacted) object.impactKineticEnergy = .5 * object.mass * speed * speed;
+          if (object.inContact && !object.onRamp && Math.hypot(object.velocityX, object.velocityY) < 2) {
+            object.velocityX = 0;
+            object.velocityY = 0;
+          }
+          setSceneObjectPosition(object);
+        });
+      }
+      if (selectedSceneObject && selectedSceneObject.dynamic) updateSceneRotationHandle(selectedSceneObject);
+      return dynamicObjects.every(object =>
+        object.inContact && object.velocityX === 0 && object.velocityY === 0
+      );
+    }
+
     function animateScene(time) {
       const deltaTime = Math.min((time - sceneLastFrame) / 1000, .04);
       sceneLastFrame = time;
-      const groundTop = sceneObjectLayer.clientHeight;
       const gravity = Number(document.getElementById("scene-gravity").value);
-      const pixelsPerMeter = 80;
-      let allSettled = true;
-      sceneObjects.filter(object => object.dynamic).forEach(object => {
-        const offsets = sceneObjectVisualOffsets(object);
-        const floorY = groundTop - offsets.bottom;
-        object.velocityY += gravity * pixelsPerMeter * deltaTime;
-        object.y += object.velocityY * deltaTime;
-        if (!object.hasImpacted && object.velocityY > 0) {
-          object.maxFallSpeed = Math.max(object.maxFallSpeed, object.velocityY / pixelsPerMeter);
-          object.impactKineticEnergy = .5 * object.mass * object.maxFallSpeed ** 2;
-        }
-        if (object.y >= floorY) {
-          object.y = floorY;
-          if (!object.hasImpacted) {
-            object.hasImpacted = true;
-            object.impactKineticEnergy = .5 * object.mass * object.maxFallSpeed ** 2;
-          }
-          if (object.velocityY > 0) {
-            object.velocityY = -object.velocityY * .58;
-            object.element.classList.remove("is-impact");
-            void object.element.offsetWidth;
-            object.element.classList.add("is-impact");
-            window.setTimeout(() => object.element.classList.remove("is-impact"), 350);
-          }
-          if (Math.abs(object.velocityY) < 16) object.velocityY = 0;
-        }
-        object.element.style.top = `${object.y}px`;
-        if (object.y < floorY || object.velocityY !== 0) allSettled = false;
-      });
+      const dynamicObjects = sceneObjects.filter(object => object.dynamic);
+      const allSettled = stepSceneSimulation(deltaTime, gravity, dynamicObjects);
       if (time - sceneLastReadout > 160) {
         const readoutObject = selectedSceneObject && selectedSceneObject.dynamic
           ? selectedSceneObject
           : sceneObjects.find(object => object.dynamic);
         if (readoutObject) {
-          const speed = Math.abs(readoutObject.velocityY) / pixelsPerMeter;
+          const speed = sceneObjectSpeed(readoutObject);
           const weight = readoutObject.mass * gravity;
           const kineticEnergy = .5 * readoutObject.mass * speed * speed;
           document.getElementById("scene-metrics").textContent =
@@ -4046,7 +4405,7 @@
         }
       }
       if (allSettled) {
-        stopSceneSimulation("Падение завершено.");
+        stopSceneSimulation("Симуляция завершена.");
         return;
       }
       sceneAnimationFrame = requestAnimationFrame(animateScene);
@@ -4069,17 +4428,20 @@
       }
       const gravity = Number(document.getElementById("scene-gravity").value);
       movableObjects.forEach(object => {
+        object.velocityX = 0;
         object.velocityY = initialSpeed * 80;
         object.maxFallSpeed = initialSpeed;
         object.impactKineticEnergy = .5 * object.mass * initialSpeed ** 2;
         object.startPotentialEnergy = object.mass * gravity * sceneObjectHeightAboveFloor(object);
         object.hasImpacted = false;
+        object.inContact = false;
       });
       sceneRunning = true;
+      if (selectedSceneObject) updateSceneRotationHandle(selectedSceneObject);
       sceneLastFrame = performance.now();
       sceneLastReadout = 0;
       document.getElementById("scene-status").textContent =
-        `Свободное падение · g = ${formatPhysicsNumber(Number(document.getElementById("scene-gravity").value))} м/с²`;
+        `Контакты и движение · g = ${formatPhysicsNumber(Number(document.getElementById("scene-gravity").value))} м/с²`;
       document.getElementById("run-scene").textContent = "Остановить";
       sceneAnimationFrame = requestAnimationFrame(animateScene);
     });
@@ -4097,7 +4459,7 @@
     document.getElementById("clear-scene").addEventListener("click", () => {
       stopSceneSimulation("Сцена очищена.");
       sceneObjects.splice(0, sceneObjects.length);
-      sceneObjectLayer.replaceChildren();
+      sceneObjectLayer.replaceChildren(sceneRotationHandle);
       selectedSceneObject = null;
       updateSceneSelection();
     });
